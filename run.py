@@ -6,4 +6,4 @@ if __name__ == '__main__':
         db.create_all()
     
     # Uruchomienie serwera (host 0.0.0.0 jest wymagany dla Dockera)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True) # nosec B104
