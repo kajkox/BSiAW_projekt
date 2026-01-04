@@ -3,8 +3,6 @@ name: CI/CD Pipeline (L5 + L6)
 on:
   push:
     branches: [ "main", "feature/L5+L6" ]
-  pull_request:
-    branches: [ "main", "feature/L5+L6" ]
 
 jobs:
   sast-and-quality:
