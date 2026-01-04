@@ -1,0 +1,180 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flaskwall-sa
+  namespace: production
+imagePullSecrets:
+- name: gcr-json-key
+---
+# PersistentVolume for PostgreSQL
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-pv
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  hostPath:
+    path: /mnt/data/postgres
+---
+# PersistentVolumeClaim for PostgreSQL
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: production
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+---
+# PostgreSQL Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          env:
+          - name: POSTGRES_USER
+            value: "user"
+          - name: POSTGRES_PASSWORD
+            value: "password"
+          - name: POSTGRES_DB
+            value: "flaskwall_db"
+          - name: PGDATA
+            value: /var/lib/postgresql/data/pgdata
+          ports:
+          - containerPort: 5432
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command:
+              - pg_isready
+              - -U
+              - user
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: production
+spec:
+  type: ClusterIP  
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgres
+---
+# Flask Application Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flaskwall
+  namespace: production
+spec:
+  replicas: 2 
+  selector:
+    matchLabels:
+      app: flaskwall
+  template:
+    metadata:
+      labels:
+        app: flaskwall
+    spec:
+      serviceAccountName: flaskwall-sa 
+      containers:
+      - name: flaskwall
+        image: us-east4-docker.pkg.dev/web-app-478717/webapp/flaskwall:latest
+        ports:
+        - containerPort: 5000
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+psycopg2://user:password@postgres:5432/flaskwall_db"
+        - name: SECRET_KEY
+          value: "bardzo_tajny_klucz_do_sesji"
+        readinessProbe:
+          httpGet:
+            path: /  
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /  
+            port: 5000
+          initialDelaySeconds: 45
+          periodSeconds: 10
+---
+# Flask Service 
+apiVersion: v1
+kind: Service
+metadata:
+  name: flaskwall
+  namespace: production
+spec:
+  type: ClusterIP  
+  selector:
+    app: flaskwall
+  ports:
+    - port: 80  # Service port
+      targetPort: 5000  # Container port
+---
+# Ingress for Flask Application
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flaskwall-ingress
+  namespace: production
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx  
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: flaskwall
+            port:
+              number: 80
+---
+
