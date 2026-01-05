@@ -2,8 +2,6 @@ from app import app, db
 from flask import Flask
 from flask_talisman import Talisman
 
-app = Flask(__name__)
-
 csp = {
     'default-src': '\'self\'',
     'img-src': '*',
@@ -19,8 +17,10 @@ Talisman(app,
 )
 
 db_password = os.environ.get('DB_PASSWORD')
-app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://user:{db_password}@db/dbname'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+if db_password:
+    app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://user:{db_password}@db/dbname'
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 if __name__ == '__main__':
     # Tworzenie tabel w bazie danych przy starcie, jeśli nie istnieją
