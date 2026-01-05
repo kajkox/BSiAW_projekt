@@ -16,12 +16,6 @@ Talisman(app,
     strict_transport_security=False
 )
 
-db_password = os.environ.get('DB_PASSWORD')
-
-if db_password:
-    app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://user:{db_password}@db/dbname'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
 if __name__ == '__main__':
     # Tworzenie tabel w bazie danych przy starcie, jeśli nie istnieją
     with app.app_context():
