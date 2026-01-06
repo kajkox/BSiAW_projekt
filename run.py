@@ -7,7 +7,10 @@ csp = {
     'default-src': '\'self\'',
     'img-src': ['\'self\'', 'data:'],
     'script-src': ['\'self\'', '\'unsafe-inline\'', 'https://cdn.jsdelivr.net', 'https://code.jquery.com', 'https://stackpath.bootstrapcdn.com'],
-    'style-src': ['\'self\'', '\'unsafe-inline\'', 'https://cdn.jsdelivr.net', 'https://stackpath.bootstrapcdn.com'],
+    'style-src': ['\'self\'', '\'unsafe-inline\'', 'https://cdn.jsdelivr.net', 'https://stackpath.bootstrapcdn.com', 'https://fonts.googleapis.com'],
+    'object-src': '\'none\'',  
+    'base-uri': '\'self\'',
+    'font-src': ['\'self\'', 'https://fonts.gstatic.com', 'data:']
 }
 
 Talisman(app,
