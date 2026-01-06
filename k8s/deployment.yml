@@ -5,14 +5,6 @@ kind: Namespace
 metadata:
   name: production
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: flaskwall-sa
-  namespace: production
-imagePullSecrets:
-- name: gcr-json-key
----
 # PersistentVolume for PostgreSQL
 apiVersion: v1
 kind: PersistentVolume
