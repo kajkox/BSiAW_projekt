@@ -1,6 +1,7 @@
 from app import app, db
 from flask import Flask
 from flask_talisman import Talisman
+import os
 
 csp = {
     'default-src': '\'self\'',
@@ -16,11 +17,19 @@ Talisman(app,
     strict_transport_security=False
 )
 
+db_password = os.environ.get('DB_PASSWORD')
+if db_password:
+    app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://user:{db_password}@db/dbname'
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 if __name__ == '__main__':
-    # Tworzenie tabel w bazie danych przy starcie, jeśli nie istnieją
     with app.app_context():
-        db.create_all()
+        try:
+            db.create_all()
+        except Exception as e:
+            print(f"Warning: Cannot connect to database: {e}", file=sys.stderr)
+            print("The app launches with limited functionality", file=sys.stderr)
 
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
-    # Uruchomienie serwera (host 0.0.0.0 jest wymagany dla Dockera)
+
     app.run(host='0.0.0.0', port=5000, debug=debug_mode) # nosec B104
