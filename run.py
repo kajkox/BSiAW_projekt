@@ -5,16 +5,17 @@ import os
 
 csp = {
     'default-src': '\'self\'',
-    'img-src': '*',
-    'script-src': ['\'self\'', '\'unsafe-inline\'', 'https://*'],
-    'style-src': ['\'self\'', '\'unsafe-inline\'', 'https://*'],
+    'img-src': ['\'self\'', 'data:'],
+    'script-src': ['\'self\'', '\'unsafe-inline\'', 'https://cdn.jsdelivr.net', 'https://code.jquery.com', 'https://stackpath.bootstrapcdn.com'],
+    'style-src': ['\'self\'', '\'unsafe-inline\'', 'https://cdn.jsdelivr.net', 'https://stackpath.bootstrapcdn.com'],
 }
 
 Talisman(app,
     content_security_policy=csp,
     force_https=False,
     session_cookie_secure=False,
-    strict_transport_security=False
+    strict_transport_security=False,
+    frame_options='DENY'
 )
 
 db_password = os.environ.get('DB_PASSWORD')
