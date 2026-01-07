@@ -21,11 +21,6 @@ Talisman(app,
     frame_options='DENY'
 )
 
-db_password = os.environ.get('DB_PASSWORD')
-if db_password:
-    app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://user:{db_password}@db/dbname'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
 if __name__ == '__main__':
     with app.app_context():
         try:
