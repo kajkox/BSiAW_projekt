@@ -4,6 +4,98 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: production
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# ServiceAccount for Flask
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flaskwall-sa
+  namespace: production
+imagePullSecrets:
+- name: gcr-json-key
+automountServiceAccountToken: false  # STIG: Don't auto-mount unless needed
+---
+# ServiceAccount for PostgreSQL
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-sa
+  namespace: production
+automountServiceAccountToken: false
+---
+# NetworkPolicy - Restrict traffic (STIG requirement)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: flaskwall-network-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: flaskwall
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - podSelector:
+        matchLabels:
+          app: flaskwall
+    ports:
+    - protocol: TCP
+      port: 5000
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:  # Allow DNS
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+---
+# NetworkPolicy for PostgreSQL
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-network-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: flaskwall
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress:
+  - to:  # Allow DNS
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
 ---
 # PersistentVolume for PostgreSQL
 apiVersion: v1
@@ -33,12 +125,15 @@ spec:
       storage: 5Gi
   storageClassName: standard
 ---
-# PostgreSQL Deployment
+# PostgreSQL Deployment (STIG Hardened)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
   namespace: production
+  labels:
+    app: postgres
+    version: "15"
 spec:
   replicas: 1
   selector:
@@ -48,24 +143,68 @@ spec:
     metadata:
       labels:
         app: postgres
+        version: "15"
     spec:
+      serviceAccountName: postgres-sa
+      # STIG: Pod-level security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999  # postgres user in the image
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+        supplementalGroups: [999]
       containers:
         - name: postgres
           image: postgres:15
+          # STIG: Container-level security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # PostgreSQL needs to write to /var/run
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - DAC_OVERRIDE
+                - FOWNER
+                - SETGID
+                - SETUID
           env:
           - name: POSTGRES_USER
-            value: "user"
+            valueFrom:
+              secretKeyRef:
+                name: postgres-credentials
+                key: username
           - name: POSTGRES_PASSWORD
-            value: "password"
+            valueFrom:
+              secretKeyRef:
+                name: postgres-credentials
+                key: password
           - name: POSTGRES_DB
             value: "flaskwall_db"
           - name: PGDATA
             value: /var/lib/postgresql/data/pgdata
           ports:
           - containerPort: 5432
+            protocol: TCP
+          # STIG: Resource limits required
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
           volumeMounts:
             - name: postgres-storage
               mountPath: /var/lib/postgresql/data
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /var/run/postgresql
           readinessProbe:
             exec:
               command:
@@ -74,10 +213,26 @@ spec:
               - user
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+              - pg_isready
+              - -U
+              - user
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
       volumes:
         - name: postgres-storage
           persistentVolumeClaim:
             claimName: postgres-pvc
+        - name: tmp
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
 ---
 # PostgreSQL Service
 apiVersion: v1
@@ -85,22 +240,28 @@ kind: Service
 metadata:
   name: postgres
   namespace: production
+  labels:
+    app: postgres
 spec:
   type: ClusterIP  
   ports:
     - port: 5432
       targetPort: 5432
+      protocol: TCP
   selector:
     app: postgres
 ---
-# Flask Application Deployment
+# Flask Application Deployment (STIG Hardened)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: flaskwall
   namespace: production
+  labels:
+    app: flaskwall
+    version: "1.0"
 spec:
-  replicas: 2 
+  replicas: 2
   selector:
     matchLabels:
       app: flaskwall
@@ -108,38 +269,112 @@ spec:
     metadata:
       labels:
         app: flaskwall
+        version: "1.0"
+      annotations:
+        # STIG: Require pod restart on config changes
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5000"
     spec:
-      serviceAccountName: flaskwall-sa 
+      serviceAccountName: flaskwall-sa
+      automountServiceAccountToken: false  # STIG: Don't mount SA token
+      # STIG: Pod-level security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+        supplementalGroups: [1000]
       containers:
       - name: flaskwall
         image: us-east4-docker.pkg.dev/web-app-478717/webapp/flaskwall:latest
+        imagePullPolicy: Always
+        # STIG: Container-level security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+              - ALL
         ports:
         - containerPort: 5000
+          protocol: TCP
+          name: http
         env:
         - name: DATABASE_URL
-          value: "postgresql+psycopg2://user:password@postgres:5432/flaskwall_db"
+          valueFrom:
+            secretKeyRef:
+              name: flask-secrets
+              key: database-url
         - name: SECRET_KEY
-          value: "bardzo_tajny_klucz_do_sesji"
+          valueFrom:
+            secretKeyRef:
+              name: flask-secrets
+              key: secret-key
+        - name: FLASK_ENV
+          value: "production"
+        - name: FLASK_DEBUG
+          value: "0"
+        # STIG: Resource requests and limits (required)
         resources:
           requests:
-            cpu: 100m       
-            memory: 128Mi   
+            cpu: 100m
+            memory: 128Mi
           limits:
-            cpu: 500m       
+            cpu: 500m
             memory: 512Mi
+        # STIG: Health checks required
         readinessProbe:
           httpGet:
-            path: /  
+            path: /health
             port: 5000
+            scheme: HTTP
           initialDelaySeconds: 30
           periodSeconds: 5
+          timeoutSeconds: 3
           failureThreshold: 6
+          successThreshold: 1
         livenessProbe:
           httpGet:
-            path: /  
+            path: /health
             port: 5000
+            scheme: HTTP
           initialDelaySeconds: 45
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        # STIG: Mount writable volumes for app needs
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /app/.cache
+        - name: logs
+          mountPath: /app/logs
+      # STIG: EmptyDir volumes for writable paths
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      # STIG: Anti-affinity for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - flaskwall
+              topologyKey: kubernetes.io/hostname
 ---
 # Flask Service 
 apiVersion: v1
@@ -147,22 +382,45 @@ kind: Service
 metadata:
   name: flaskwall
   namespace: production
+  labels:
+    app: flaskwall
 spec:
   type: ClusterIP  
   selector:
     app: flaskwall
   ports:
-    - port: 80  # Service port
-      targetPort: 5000  # Container port
+    - port: 80
+      targetPort: 5000
+      protocol: TCP
+      name: http
+  sessionAffinity: ClientIP  # STIG: Session persistence
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours
 ---
-# Ingress for Flask Application
+# Ingress for Flask Application (STIG Hardened)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: flaskwall-ingress
   namespace: production
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
+    # STIG: Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: SAMEORIGIN";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Permissions-Policy: geolocation=(), microphone=(), camera=()";
+    # STIG: Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+    # STIG: Request body size limit
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # STIG: Timeouts
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
 spec:
   ingressClassName: nginx  
   rules:
@@ -176,7 +434,7 @@ spec:
             port:
               number: 80
 ---
-# Horizontal Pod Autoscaler for Flask
+# HorizontalPodAutoscaler for Flask (with STIG limits)
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -187,37 +445,80 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: flaskwall
-  minReplicas: 2              
-  maxReplicas: 10            
+  minReplicas: 2
+  maxReplicas: 10
   metrics:
   - type: Resource
     resource:
       name: cpu
       target:
         type: Utilization
-        averageUtilization: 70  
+        averageUtilization: 70
   - type: Resource
     resource:
       name: memory
       target:
         type: Utilization
-        averageUtilization: 80  
+        averageUtilization: 80
   behavior:
     scaleDown:
-      stabilizationWindowSeconds: 300  
+      stabilizationWindowSeconds: 300
       policies:
       - type: Percent
-        value: 50              
-        periodSeconds: 60
-      - type: Pods
-        value: 2               
+        value: 50
         periodSeconds: 60
     scaleUp:
-      stabilizationWindowSeconds: 0   
+      stabilizationWindowSeconds: 0
       policies:
       - type: Percent
-        value: 100            
+        value: 100
         periodSeconds: 15
-      - type: Pods
-        value: 4           
-        periodSeconds: 15
+---
+# PodDisruptionBudget (STIG: High Availability)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: flaskwall-pdb
+  namespace: production
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: flaskwall
+---
+# ResourceQuota (STIG: Resource limits)
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: production-quota
+  namespace: production
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    persistentvolumeclaims: "10"
+    services.loadbalancers: "0"  # Prevent accidental LoadBalancer creation
+---
+# LimitRange (STIG: Default resource constraints)
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: production-limits
+  namespace: production
+spec:
+  limits:
+  - max:
+      cpu: "2"
+      memory: 2Gi
+    min:
+      cpu: 50m
+      memory: 64Mi
+    default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+    type: Container
