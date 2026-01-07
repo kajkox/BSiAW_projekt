@@ -32,7 +32,6 @@ if __name__ == '__main__':
             db.create_all()
         except Exception as e:
             print(f"Warning: Cannot connect to database: {e}", file=sys.stderr)
-            print("The app launches with limited functionality", file=sys.stderr)
 
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
 
