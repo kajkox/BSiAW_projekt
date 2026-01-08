@@ -1,11 +1,8 @@
-name: CI/CD Pipeline (L5)
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  workflow_dispatch: 
+  workflow_dispatch:
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -15,13 +12,13 @@ env:
   NAMESPACE: production
 
 jobs:
-  build-and-test:
-    name: Building and Testing
+  sast-and-quality:
+    name: SAST & Code Quality
     runs-on: ubuntu-latest
 
     steps:
       - name: Download Code (Checkout)
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -35,29 +32,109 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+          cache: 'pip'
 
       - name: Lib installation
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install flake8 bandit safety
 
       - name: Check code syntax
         run: |
-          python -m py_compile run.py
-          echo "Success!"
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Security Audit - Dependencies
+        run: |
+          safety check -r requirements.txt --continue-on-error
+
+      - name: Security Audit - Code
+        run: |
+          bandit -r . -f custom --msg-template "{abspath}:{line}: {test_id}[bandit]: {severity}: {msg}"
+
+  dast-and-build:
+    name: Build, DAST & Deploy
+    needs: sast-and-quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Secrets handling test
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD_PROD }}
+        run: |
+          if [ -z "$DB_PASSWORD" ]; then
+            echo "Warning: Secret DB_PASSWORD_PROD is missing!"
+          else
+            echo "Success! Secrets loaded."
+          fi
+
+      - name: Building Local Image for Testing
+        run: |
+          docker build . --file Dockerfile --tag local-test-app:latest
+
+      - name: Launch Container for DAST
+        run: |
+          docker run -d \
+            -p 5000:5000 \
+            -e DB_PASSWORD="test_password" \
+            -e USE_SQLITE="True" \
+            --name test-app \
+            local-test-app:latest
+
+          echo "Waiting 10s for the app to launch..."
+          sleep 10
+
+      - name: OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: 'http://localhost:5000'
+          fail_action: false
+          allow_issue_writing: false
+          cmd_options: '-a'
+      
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker
-        run: |
-          gcloud auth configure-docker us-east4-docker.pkg.dev
+        run: gcloud auth configure-docker us-east4-docker.pkg.dev
 
-      - name: Build Docker image
+      - name: Build and Tag Docker Image
         run: |
           docker build -t ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
           docker tag ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
                      ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest
 
-      - name: Push Docker image
+      - name: Push Docker Image
         run: |
-          docker push ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest
+          IMAGE_PATH="${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          docker push $IMAGE_PATH 
+
+      - name: Set up kubectl
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
+            ${{ env.IMAGE_NAME }}=${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -n ${{ env.NAMESPACE }}
+          
+          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} -n ${{ env.NAMESPACE }}
+
+      - name: Verify Deployment
+        run: |
+          kubectl get pods -n ${{ env.NAMESPACE }}
+          kubectl get svc -n ${{ env.NAMESPACE }}
 
