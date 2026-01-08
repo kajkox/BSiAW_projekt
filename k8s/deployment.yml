@@ -17,7 +17,7 @@ metadata:
   namespace: production
 imagePullSecrets:
 - name: gcr-json-key
-automountServiceAccountToken: false  # STIG: Don't auto-mount unless needed
+automountServiceAccountToken: false  
 ---
 # ServiceAccount for PostgreSQL
 apiVersion: v1
@@ -27,7 +27,7 @@ metadata:
   namespace: production
 automountServiceAccountToken: false
 ---
-# NetworkPolicy - Restrict traffic (STIG requirement)
+# NetworkPolicy 
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -125,7 +125,7 @@ spec:
       storage: 5Gi
   storageClassName: standard
 ---
-# PostgreSQL Deployment (STIG Hardened)
+# PostgreSQL Deployment 
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -146,10 +146,9 @@ spec:
         version: "15"
     spec:
       serviceAccountName: postgres-sa
-      # STIG: Pod-level security context
       securityContext:
         runAsNonRoot: true
-        runAsUser: 999  # postgres user in the image
+        runAsUser: 999  
         fsGroup: 999
         seccompProfile:
           type: RuntimeDefault
@@ -160,7 +159,7 @@ spec:
           # STIG: Container-level security context
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false  # PostgreSQL needs to write to /var/run
+            readOnlyRootFilesystem: false 
             runAsNonRoot: true
             runAsUser: 999
             capabilities:
@@ -251,7 +250,7 @@ spec:
   selector:
     app: postgres
 ---
-# Flask Application Deployment (STIG Hardened)
+# Flask Application Deployment 
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -271,13 +270,11 @@ spec:
         app: flaskwall
         version: "1.0"
       annotations:
-        # STIG: Require pod restart on config changes
         prometheus.io/scrape: "true"
         prometheus.io/port: "5000"
     spec:
       serviceAccountName: flaskwall-sa
-      automountServiceAccountToken: false  # STIG: Don't mount SA token
-      # STIG: Pod-level security context
+      automountServiceAccountToken: false  
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -317,7 +314,6 @@ spec:
           value: "production"
         - name: FLASK_DEBUG
           value: "0"
-        # STIG: Resource requests and limits (required)
         resources:
           requests:
             cpu: 100m
@@ -325,7 +321,6 @@ spec:
           limits:
             cpu: 500m
             memory: 512Mi
-        # STIG: Health checks required
         readinessProbe:
           httpGet:
             path: /health
@@ -346,7 +341,6 @@ spec:
           timeoutSeconds: 5
           failureThreshold: 3
           successThreshold: 1
-        # STIG: Mount writable volumes for app needs
         volumeMounts:
         - name: tmp
           mountPath: /tmp
@@ -354,7 +348,6 @@ spec:
           mountPath: /app/.cache
         - name: logs
           mountPath: /app/logs
-      # STIG: EmptyDir volumes for writable paths
       volumes:
       - name: tmp
         emptyDir: {}
@@ -362,7 +355,6 @@ spec:
         emptyDir: {}
       - name: logs
         emptyDir: {}
-      # STIG: Anti-affinity for high availability
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -393,12 +385,12 @@ spec:
       targetPort: 5000
       protocol: TCP
       name: http
-  sessionAffinity: ClientIP  # STIG: Session persistence
+  sessionAffinity: ClientIP 
   sessionAffinityConfig:
     clientIP:
-      timeoutSeconds: 10800  # 3 hours
+      timeoutSeconds: 10800  
 ---
-# Ingress for Flask Application (STIG Hardened)
+# Ingress for Flask Application 
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -412,12 +404,9 @@ metadata:
       more_set_headers "X-XSS-Protection: 1; mode=block";
       more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
       more_set_headers "Permissions-Policy: geolocation=(), microphone=(), camera=()";
-    # STIG: Rate limiting
     nginx.ingress.kubernetes.io/limit-rps: "100"
     nginx.ingress.kubernetes.io/limit-connections: "50"
-    # STIG: Request body size limit
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-    # STIG: Timeouts
     nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
@@ -434,7 +423,7 @@ spec:
             port:
               number: 80
 ---
-# HorizontalPodAutoscaler for Flask (with STIG limits)
+# HorizontalPodAutoscaler for Flask 
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -474,7 +463,7 @@ spec:
         value: 100
         periodSeconds: 15
 ---
-# PodDisruptionBudget (STIG: High Availability)
+# PodDisruptionBudget 
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -486,7 +475,7 @@ spec:
     matchLabels:
       app: flaskwall
 ---
-# ResourceQuota (STIG: Resource limits)
+# ResourceQuota 
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -499,9 +488,9 @@ spec:
     limits.cpu: "8"
     limits.memory: 16Gi
     persistentvolumeclaims: "10"
-    services.loadbalancers: "0"  # Prevent accidental LoadBalancer creation
+    services.loadbalancers: "0"  
 ---
-# LimitRange (STIG: Default resource constraints)
+# LimitRange 
 apiVersion: v1
 kind: LimitRange
 metadata:
