@@ -1,8 +1,6 @@
-jak odpalic?
-clonujecie sobie repo i bedac w tym folderze uruchamiacie
-docker-compose up --build
+W ramach projektu zaimplementowano kompletną aplikację webową o nazwie FlaskWall, służącą jako środowisko demonstracyjne dla bezpiecznego cyklu wytwarzania oprogramowania. 
 
-i na localhoscie na porcie 5000 bedziecie mieli
+System wytworzono w oparciu o język Python 3.9 oraz framework Flask. Wybór tej technologii podyktowany był koniecznością pełnej kontroli nad nagłówkami HTTP 
+oraz łatwością integracji z narzędziami audytującymi kod. 
 
-jak wylaczyc?
-docker-compose down
+Warstwę dostępu do danych zrealizowano przy użyciu SQLAlchemy, co pozwoliło na uniezależnienie kodu aplikacji od silnika bazy danych (SQLite w środowisku testowym CI/CD, PostgreSQL w środowisku produkcyjnym).
